@@ -1,4 +1,7 @@
+import hmac
 import json
+import os
+from functools import wraps
 from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, url_for
@@ -12,6 +15,10 @@ app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
 RECEIVED_FILE = Path(__file__).parent / "received.bin"
 
 USERS = {1: "john", 2: "steve", 3: "bill"}
+
+# STEP 5: demo credentials. Real ones come from environment variables if set.
+AUTH_USERNAME = os.environ.get("API_USERNAME", "admin")
+AUTH_PASSWORD = os.environ.get("API_PASSWORD", "secret")
 
 
 # ---------------- STEP 1: routes ----------------
@@ -65,7 +72,7 @@ def api_message():
         RECEIVED_FILE.write_bytes(data)
         return f"Binary message written! ({len(data)} bytes)\n"
 
-    abort(415)   # STEP 4 change: a real 415 error, handled below
+    abort(415)
 
 
 # ---------------- STEP 4: responses, status codes, errors ----------------
@@ -107,6 +114,51 @@ def handle_http_error(error):
     })
     response.content_type = "application/json"
     return response
+
+
+# ---------------- STEP 5: basic authentication ----------------
+
+def check_auth(username, password):
+    """Compare credentials in constant time, so response timing
+    doesn't leak how many characters were correct."""
+    user_ok = hmac.compare_digest(username.encode("utf-8"), AUTH_USERNAME.encode("utf-8"))
+    pass_ok = hmac.compare_digest(password.encode("utf-8"), AUTH_PASSWORD.encode("utf-8"))
+    return user_ok and pass_ok
+
+
+def authenticate():
+    """A 401 reply that tells the client how to log in."""
+    resp = jsonify({
+        "status": 401,
+        "error": "Unauthorized",
+        "message": "Authenticate.",
+        "path": request.path,
+    })
+    resp.status_code = 401
+    resp.headers["WWW-Authenticate"] = 'Basic realm="Example"'
+    return resp
+
+
+def requires_auth(f):
+    """Decorator: only run the route function if valid Basic credentials came in."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if auth is None or auth.type != "basic":
+            return authenticate()
+
+        if not check_auth(auth.username or "", auth.password or ""):
+            return authenticate()
+
+        return f(*args, **kwargs)
+
+    return decorated
+
+
+@app.route("/secrets")
+@requires_auth
+def api_secrets():
+    return "Shhh this is top secret spy stuff!\n"
 
 
 if __name__ == "__main__":
