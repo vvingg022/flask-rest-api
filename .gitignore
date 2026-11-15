@@ -5,3 +5,4 @@ __pycache__/
 received.bin
 app.log
 *.bin
+.pytest_cache/

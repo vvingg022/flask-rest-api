@@ -1,5 +1,6 @@
 import hmac
 import json
+import logging
 import os
 from functools import wraps
 from pathlib import Path
@@ -13,10 +14,11 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
 
 RECEIVED_FILE = Path(__file__).parent / "received.bin"
+LOG_FILE = Path(__file__).parent / "app.log"
 
 USERS = {1: "john", 2: "steve", 3: "bill"}
 
-# STEP 5: demo credentials. Real ones come from environment variables if set.
+# Demo credentials. Real ones come from environment variables if set.
 AUTH_USERNAME = os.environ.get("API_USERNAME", "admin")
 AUTH_PASSWORD = os.environ.get("API_PASSWORD", "secret")
 
@@ -144,10 +146,13 @@ def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
-        if auth is None or auth.type != "basic":
-            return authenticate()
-
-        if not check_auth(auth.username or "", auth.password or ""):
+        if (
+            auth is None
+            or auth.type != "basic"
+            or not check_auth(auth.username or "", auth.password or "")
+        ):
+            # STEP 6: log the failure, but never the password itself.
+            app.logger.warning("Rejected auth attempt on %s from %s", request.path, request.remote_addr)
             return authenticate()
 
         return f(*args, **kwargs)
@@ -161,5 +166,31 @@ def api_secrets():
     return "Shhh this is top secret spy stuff!\n"
 
 
+# ---------------- STEP 6: logging ----------------
+
+def configure_logging(flask_app):
+    """Log to the console and to app.log."""
+    flask_app.logger.setLevel(logging.INFO)
+
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    flask_app.logger.addHandler(file_handler)
+
+
+@app.after_request
+def log_request(response):
+    app.logger.info("%s %s -> %s", request.method, request.path, response.status_code)
+    return response
+
+
+@app.route("/logging-demo")
+def api_logging_demo():
+    app.logger.info("informing")
+    app.logger.warning("warning")
+    app.logger.error("screaming bloody murder!")
+    return "check your logs\n"
+
+
 if __name__ == "__main__":
+    configure_logging(app)
     app.run(debug=True, port=8000)
